@@ -1,0 +1,21 @@
+{
+  "id": "access-guard",
+  "name": "NexaPress Access Guard",
+  "description": "ログインページと管理画面へのアクセスを保護します。",
+  "version": "1.0.0",
+  "bootstrap": "bootstrap.php",
+  "bundled": true,
+  "requires": {
+    "nexapress": "1.9.0",
+    "php": "8.0"
+  },
+  "update": {
+    "provider": "github",
+    "repository": "aki-sho/nexapress-access-guard",
+    "asset": "nexapress-access-guard-{version}.zip"
+  },
+  "admin": {
+    "menu_label": "アクセスガード",
+    "dashboard": "admin/dashboard.php"
+  }
+}
