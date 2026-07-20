@@ -2,11 +2,13 @@
   "id": "access-guard",
   "name": "NexaPress Access Guard",
   "description": "ログインページと管理画面へのアクセスを保護します。",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "bootstrap": "bootstrap.php",
   "bundled": true,
+  "icon_url": "https://raw.githubusercontent.com/aki-sho/nexapress-access-guard/img.png",
+  "download_url": "https://github.com/aki-sho/nexapress-access-guard/releases/download/v1.0.1/nexapress-access-guard-1.0.1.zip",
   "requires": {
-    "nexapress": "1.9.0",
+    "nexapress": "2.1.0",
     "php": "8.0"
   },
   "update": {
