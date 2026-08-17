@@ -141,23 +141,23 @@ class LoginUrl extends Controller
             return;
         }
 
-        $email = trim(
-            (string)($_POST['email'] ?? '')
+        $username = trim(
+            (string)($_POST['username'] ?? '')
         );
 
         $password =
             (string)($_POST['password'] ?? '');
 
-        if ($email === '' || $password === '') {
+        if ($username === '' || $password === '') {
             $this->renderLogin(
-                'メールアドレスとパスワードを入力してください。',
-                $email
+                'ユーザー名とパスワードを入力してください。',
+                $username
             );
 
             return;
         }
 
-        $user = User::findByEmail($email);
+        $user = User::findByUsername($username);
 
         if (
             !$user ||
@@ -176,7 +176,7 @@ class LoginUrl extends Controller
 
             $this->renderLogin(
                 $message,
-                $email
+                $username
             );
 
             return;
@@ -188,12 +188,12 @@ class LoginUrl extends Controller
         if (
             FailOnce::shouldReject(
                 $ip,
-                $email
+                $username
             )
         ) {
             $this->renderLogin(
                 'ログイン情報が正しくありません。',
-                $email
+                $username
             );
 
             return;
@@ -206,7 +206,7 @@ class LoginUrl extends Controller
 
         FailOnce::clear(
             $ip,
-            $email
+            $username
         );
 
         session_regenerate_id(true);
@@ -254,7 +254,7 @@ class LoginUrl extends Controller
      */
     private function renderLogin(
         ?string $error = null,
-        string $email = ''
+        string $username = ''
     ): void {
         $title = 'ログイン';
 
@@ -291,15 +291,15 @@ class LoginUrl extends Controller
                     >
 
                     <div class="form-group">
-                        <label for="email">
-                            メールアドレス
+                        <label for="username">
+                            ユーザー名
                         </label>
 
                         <input
-                            type="email"
-                            id="email"
-                            name="email"
-                            value="<?= e($email) ?>"
+                            type="text"
+                            id="username"
+                            name="username"
+                            value="<?= e($username) ?>"
                             autocomplete="username"
                             required
                         >

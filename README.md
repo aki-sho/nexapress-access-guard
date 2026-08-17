@@ -7,12 +7,12 @@ NexaPressへの基本同梱を想定していますが、拡張機能単体で�
 ## バージョン
 
 ```text
-1.0.0
+1.0.2
 ```
 
 ## 対応環境
 
-- NexaPress 1.9.0以上
+- NexaPress 2.1.0以上
 - PHP 8.0以上
 - Apache
 - PHP ZipArchive
@@ -239,7 +239,7 @@ php build.php
 正常に完了すると、次のZIPが作成されます。
 
 ```text
-dist\nexapress-access-guard-1.0.0.zip
+dist\nexapress-access-guard-1.0.2.zip
 ```
 
 作成されたZIPを確認します。
@@ -267,7 +267,7 @@ access-guard/
 次の順番で確認してください。
 
 1. NexaPress管理画面の「拡張機能」を開く
-2. `nexapress-access-guard-1.0.0.zip`をアップロードする
+2. `nexapress-access-guard-1.0.2.zip`をアップロードする
 3. NexaPress Access Guardを有効化する
 4. 「アクセスガード」の設定画面を開く
 5. 現在のIPが表示されることを確認する

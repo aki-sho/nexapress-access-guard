@@ -14,7 +14,7 @@ class FailOnce
      */
     public static function shouldReject(
         string $ip,
-        string $email
+        string $username
     ): bool {
         $setting = Settings::get(
             'fail_once',
@@ -42,7 +42,7 @@ class FailOnce
 
         $key = self::key(
             $ip,
-            $email
+            $username
         );
 
         return self::withData(
@@ -99,11 +99,11 @@ class FailOnce
      */
     public static function clear(
         string $ip,
-        string $email
+        string $username
     ): void {
         $key = self::key(
             $ip,
-            $email
+            $username
         );
 
         self::withData(
@@ -118,17 +118,17 @@ class FailOnce
     }
 
     /*
-     * IPとメールアドレスから保存キーを作成
+     * IPとユーザー名から保存キーを作成
      */
     private static function key(
         string $ip,
-        string $email
+        string $username
     ): string {
         return hash(
             'sha256',
             $ip
             . '|'
-            . strtolower(trim($email))
+            . strtolower(trim($username))
         );
     }
 

@@ -162,6 +162,7 @@ $excludedPaths = [
     '.idea',
     '.vscode',
     'dist',
+    'tests',
     'build.php',
     '.gitignore',
 ];

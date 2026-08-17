@@ -2,6 +2,7 @@
 
 namespace NexaPressAccessGuard;
 
+use app\Core\Auth;
 use app\Core\Router;
 
 /*
@@ -46,7 +47,33 @@ class AccessControl
          */
         if (self::isAdminPath($path)) {
             self::checkAdminPageAccess($ip);
+            self::redirectGuestToLogin();
         }
+    }
+
+    /*
+     * ログインURL変更中の未ログインユーザーを誘導
+     */
+    private static function redirectGuestToLogin(): void
+    {
+        $setting = Settings::get(
+            'login_url',
+            []
+        );
+
+        if (
+            empty($setting['enabled']) ||
+            Auth::check()
+        ) {
+            return;
+        }
+
+        redirect_to(
+            ltrim(
+                LoginUrl::path(),
+                '/'
+            )
+        );
     }
 
     /*
