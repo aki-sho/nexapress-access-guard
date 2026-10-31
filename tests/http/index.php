@@ -53,6 +53,17 @@ namespace {
     }
 }
 
+namespace NexaPressAccessGuard {
+    function mail(string $to, string $subject, string $body, string $headers): bool
+    {
+        $path = BASE_PATH . '/captured-mail.json';
+        $captured = is_file($path) ? json_decode(file_get_contents($path), true) : [];
+        $captured[] = compact('to', 'subject', 'body', 'headers');
+        file_put_contents($path, json_encode($captured));
+        return true;
+    }
+}
+
 namespace app\Core {
     class Controller
     {
@@ -63,6 +74,16 @@ namespace app\Core {
         public static function check(): bool
         {
             return isset($_SESSION['user']);
+        }
+
+        public static function role(): ?string
+        {
+            return $_SESSION['user']['role'] ?? null;
+        }
+
+        public static function user(): ?array
+        {
+            return $_SESSION['user'] ?? null;
         }
 
         public static function login(array $user): void
@@ -89,6 +110,21 @@ namespace app\Core {
             if (!self::check()) {
                 \redirect_to('admin/login');
             }
+        }
+    }
+
+    class Permission
+    {
+        public static function require(string $permission): void
+        {
+            Auth::requireLogin();
+
+            if ($permission === 'extensions.manage' && Auth::role() === 'administrator') {
+                return;
+            }
+
+            http_response_code(403);
+            exit('アクセス権限がありません。');
         }
     }
 
@@ -191,20 +227,19 @@ namespace app\Models {
         public static function findByUsername(
             string $username
         ): ?array {
-            if ($username !== 'admin') {
+            $username = strtolower($username);
+
+            if (!in_array($username, ['admin', 'editor'], true)) {
                 return null;
             }
 
             return [
-                'id' => 1,
-                'username' => 'admin',
+                'id' => $username === 'admin' ? 1 : 2,
+                'username' => $username,
                 'name' => '管理者',
                 'email' => 'admin@example.com',
-                'role' => 'administrator',
-                'password_hash' => password_hash(
-                    'correct-password',
-                    PASSWORD_DEFAULT
-                ),
+                'role' => $username === 'admin' ? 'administrator' : 'editor',
+                'password_hash' => '$2y$10$YKDl9yfAWgS.boXk7iS/sukUksVtZjizvuBEPkcMtiT53OwDDoTFW',
             ];
         }
     }
@@ -287,6 +322,12 @@ namespace TestSupport {
         {
             Auth::requireLogin();
             echo 'ADMIN OK';
+            echo '<input name="_csrf_token" value="' . \e(\app\Core\Csrf::token()) . '">';
+        }
+
+        public function settings(): void
+        {
+            require dirname(__DIR__, 2) . '/admin/dashboard.php';
         }
     }
 }
@@ -321,6 +362,11 @@ namespace {
         TestSupport\AdminController::class . '@index'
     );
 
+    $router->get(
+        '/admin/extensions/access-guard/dashboard',
+        TestSupport\AdminController::class . '@settings'
+    );
+
     $testConfigurationPath =
         BASE_PATH . '/test-config.json';
 
@@ -340,23 +386,7 @@ namespace {
     }
 
     if (!empty($testConfiguration['extension_enabled'])) {
-        $includeFiles = [
-            '/includes/Settings.php',
-            '/includes/IpRules.php',
-            '/includes/LoginUrl.php',
-            '/includes/LoginLock.php',
-            '/includes/FailOnce.php',
-            '/includes/AccessControl.php',
-        ];
-
-        foreach ($includeFiles as $includeFile) {
-            require_once $repositoryDirectory
-                . $includeFile;
-        }
-
-        NexaPressAccessGuard\AccessControl::boot(
-            $router
-        );
+        require $repositoryDirectory . '/bootstrap.php';
     }
 
     $router->dispatch();

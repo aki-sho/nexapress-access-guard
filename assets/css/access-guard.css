@@ -113,6 +113,7 @@
 }
 
 .access-guard-field input,
+.access-guard-field textarea,
 .access-guard-field select,
 .access-guard-ip-add input {
   width: 100%;
@@ -183,6 +184,15 @@
   margin: 0;
   padding: 16px 4px;
   color: #64748b;
+}
+
+.access-guard-table-scroll { overflow-x: auto; }
+.access-guard-audit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.access-guard-audit-table th, .access-guard-audit-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+  vertical-align: top;
 }
 
 @media (max-width: 850px) {

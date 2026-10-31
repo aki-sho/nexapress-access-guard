@@ -109,7 +109,7 @@ class FailOnce
         self::withData(
             static function (
                 array &$data
-            ) use ($key): null {
+            ) use ($key): mixed {
                 unset($data[$key]);
 
                 return null;

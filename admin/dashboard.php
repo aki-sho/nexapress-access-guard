@@ -1,5 +1,7 @@
 <?php
 
+\app\Core\Permission::require('extensions.manage');
+
 /*
  * 設定情報を取得
  */
@@ -252,8 +254,8 @@ $selected = static function (
             <h2>ログインロック</h2>
 
             <p>
-                ログイン失敗が上限に達したIPを
-                一定期間ロックします。
+                ログイン失敗が上限に達したIPまたはアカウントを
+                一定期間ロックします。連続失敗時は待機時間を設けます。
             </p>
 
             <form
@@ -645,4 +647,5 @@ $selected = static function (
             <?php endif; ?>
         </div>
     </section>
+    <?php require __DIR__ . '/features.php'; ?>
 </div>

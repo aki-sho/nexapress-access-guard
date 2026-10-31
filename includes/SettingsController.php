@@ -2,8 +2,8 @@
 
 namespace NexaPressAccessGuard;
 
-use app\Core\Auth;
 use app\Core\Csrf;
+use app\Core\Permission;
 use Throwable;
 
 /*
@@ -11,6 +11,67 @@ use Throwable;
  */
 class SettingsController
 {
+    public function saveTrustedProxy(): void
+    {
+        $this->authorize();
+        $networks = preg_split('/[\s,]+/', trim((string)($_POST['proxies'] ?? '')), -1, PREG_SPLIT_NO_EMPTY);
+        $setting = [
+            'enabled' => $this->isEnabled(),
+            'proxies' => $networks,
+            'header' => (string)($_POST['header'] ?? 'x-forwarded-for'),
+        ];
+
+        try {
+            $settings = Settings::all();
+            $settings['trusted_proxy'] = $setting;
+            $settings = Settings::validate($settings);
+            $newIp = IpRules::resolve($_SERVER, $settings['trusted_proxy']);
+
+            if ($newIp === '' || IpRules::isDenied($newIp) ||
+                (($settings['login_page_access']['enabled'] || $settings['admin_page_access']['enabled']) && !IpRules::isAllowed($newIp))) {
+                $this->error('変更後の接続元IPが許可されないため保存できません。先に利用者IPを許可IPへ登録してください。');
+                return;
+            }
+
+            $this->store('trusted_proxy', $settings['trusted_proxy'], '信頼済みプロキシ設定を保存しました。');
+        } catch (Throwable $exception) {
+            $this->error($exception->getMessage());
+        }
+    }
+
+    public function saveMonitoring(): void
+    {
+        $this->authorize();
+        $retention = $this->selectedNumber('retention_days', [7, 30, 90]);
+        $threshold = $this->selectedNumber('failure_threshold', [5, 10, 20, 50]);
+
+        if ($retention === null || $threshold === null) {
+            $this->error('監視設定の値が正しくありません。');
+            return;
+        }
+
+        try {
+            // 片方の検証に失敗した場合も両方の設定を変更しない。
+            $settings = Settings::all();
+            $notification = [
+                'enabled' => $this->isEnabled(),
+                'email' => trim((string)($_POST['email'] ?? '')),
+                'failure_threshold' => $threshold,
+            ];
+            $settings['notifications'] = $notification;
+            Settings::validate($settings);
+            Settings::saveSections([
+                'notifications' => $notification,
+                'audit' => ['retention_days' => $retention],
+            ]);
+            Settings::setNotice('監査ログ・異常通知の設定を保存しました。');
+        } catch (Throwable $exception) {
+            Settings::setNotice($exception->getMessage(), 'error');
+        }
+
+        $this->redirectBack();
+    }
+
     /*
      * ログインページアクセス制限
      */
@@ -193,7 +254,6 @@ class SettingsController
 
         try {
             Settings::addIp('allowed_ips', $ip);
-            Settings::removeIp('denied_ips', $ip);
 
             Settings::setNotice(
                 '許可IPを追加しました。'
@@ -284,7 +344,6 @@ class SettingsController
 
         try {
             Settings::addIp('denied_ips', $ip);
-            Settings::removeIp('allowed_ips', $ip);
 
             Settings::setNotice(
                 '拒否IPを追加しました。'
@@ -331,11 +390,11 @@ class SettingsController
     }
 
     /*
-     * ログイン状態とCSRFトークンを確認
+     * 拡張機能の管理権限とCSRFトークンを確認
      */
     private function authorize(): void
     {
-        Auth::requireLogin();
+        Permission::require('extensions.manage');
 
         Csrf::requireValid(
             $_POST['_csrf_token'] ?? null
@@ -377,20 +436,9 @@ class SettingsController
      */
     private function postedIp(): ?string
     {
-        $ip = trim(
+        return IpRules::normalize(
             (string)($_POST['ip'] ?? '')
         );
-
-        if (
-            filter_var(
-                $ip,
-                FILTER_VALIDATE_IP
-            ) === false
-        ) {
-            return null;
-        }
-
-        return $ip;
     }
 
     /*
@@ -398,17 +446,7 @@ class SettingsController
      */
     private function currentIpIsAllowed(): bool
     {
-        $allowedIps = Settings::get(
-            'allowed_ips',
-            []
-        );
-
-        return is_array($allowedIps) &&
-            in_array(
-                $this->currentIp(),
-                $allowedIps,
-                true
-            );
+        return IpRules::isAllowed($this->currentIp());
     }
 
     /*
@@ -416,9 +454,7 @@ class SettingsController
      */
     private function currentIp(): string
     {
-        return (string)(
-            $_SERVER['REMOTE_ADDR'] ?? ''
-        );
+        return IpRules::currentIp();
     }
 
     /*

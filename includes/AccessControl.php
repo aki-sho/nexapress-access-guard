@@ -15,6 +15,15 @@ class AccessControl
      */
     public static function boot(Router $router): void
     {
+        try {
+            self::enforce($router);
+        } catch (StorageException $exception) {
+            JsonStorage::unavailable();
+        }
+    }
+
+    private static function enforce(Router $router): void
+    {
         /*
          * ログイン用ルートを登録
          */
@@ -27,10 +36,16 @@ class AccessControl
             return;
         }
 
+        if ($ip === '') {
+            AuditLog::record('access_denied', '', ['reason' => 'invalid_client_ip']);
+            self::deny();
+        }
+
         /*
          * 拒否IPは管理関連ページへアクセス不可
          */
         if (IpRules::isDenied($ip)) {
+            AuditLog::record('access_denied', '', ['reason' => 'denied_ip']);
             self::deny();
         }
 
@@ -47,7 +62,24 @@ class AccessControl
          */
         if (self::isAdminPath($path)) {
             self::checkAdminPageAccess($ip);
+            self::checkSecondFactorSession();
             self::redirectGuestToLogin();
+        }
+    }
+
+    private static function checkSecondFactorSession(): void
+    {
+        if (!Auth::check()) {
+            return;
+        }
+
+        $user = Auth::user();
+        $version = TwoFactor::version((int)($user['id'] ?? 0));
+
+        if ($version !== null && !hash_equals($version, (string)($_SESSION['access_guard_mfa_verified'] ?? ''))) {
+            Auth::logout();
+            unset($_SESSION['access_guard_mfa_verified'], $_SESSION['access_guard_pending_login']);
+            redirect_to(ltrim(LoginUrl::path(), '/'));
         }
     }
 
@@ -92,6 +124,7 @@ class AccessControl
         }
 
         if (!IpRules::isAllowed($ip)) {
+            AuditLog::record('access_denied', '', ['reason' => 'login_allowlist']);
             self::deny();
         }
     }
@@ -112,6 +145,7 @@ class AccessControl
         }
 
         if (!IpRules::isAllowed($ip)) {
+            AuditLog::record('access_denied', '', ['reason' => 'admin_allowlist']);
             self::deny();
         }
     }

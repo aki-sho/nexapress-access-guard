@@ -174,7 +174,7 @@ function configureExtension(
     );
 
     foreach (
-        ['login-locks.json', 'fail-once.json']
+        ['login-locks.json', 'login-locks.json.bak', 'fail-once.json', 'settings.json.bak', 'two-factor.json', 'two-factor.json.bak']
         as $fileName
     ) {
         $path = $runtimeDirectory
@@ -955,6 +955,140 @@ try {
     }
 
     curl_close($client);
+
+    /* 設定保存の全9経路で管理権限・CSRFを確認する。 */
+    configureExtension($runtimeDirectory, true);
+    $settingsPath = $runtimeDirectory . '/storage/extensions/access-guard/settings.json';
+    $settingsBase = '/admin/extensions/access-guard/settings/';
+    $settingsActions = [
+        'login-access', 'admin-access', 'login-url', 'login-lock', 'fail-once',
+        'allowed-ip/add', 'allowed-ip/remove', 'denied-ip/add', 'denied-ip/remove', 'trusted-proxy', 'monitoring',
+    ];
+    $form = [
+        'enabled' => '1', 'slug' => 'secure-entry', 'attempts' => '3',
+        'duration' => '15', 'count' => '1', 'ip' => '192.0.2.222',
+    ];
+
+    foreach (['editor', 'admin'] as $username) {
+        $client = newClient();
+        $response = request($client, $baseUrl, 'GET', '/secure-entry');
+        $response = request($client, $baseUrl, 'POST', '/secure-entry', [
+            '_csrf_token' => csrfToken($response['body']),
+            'username' => $username,
+            'password' => 'correct-password',
+        ]);
+        assertSameValue(302, $response['status'], $username . 'のログイン');
+        $response = request($client, $baseUrl, 'GET', '/admin');
+        $token = csrfToken($response['body']);
+        $before = file_get_contents($settingsPath);
+
+        foreach ($settingsActions as $action) {
+            $response = request($client, $baseUrl, 'POST', $settingsBase . $action, [
+                '_csrf_token' => $username === 'editor' ? $token : 'invalid-token',
+            ] + $form);
+            assertSameValue($username === 'editor' ? 403 : 419, $response['status'],
+                $username . 'の不正な設定保存を拒否: ' . $action);
+        }
+
+        assertSameValue($before, file_get_contents($settingsPath), '拒否後は設定が変わらない: ' . $username);
+        $response = request($client, $baseUrl, 'GET', '/admin/extensions/access-guard/dashboard');
+        assertSameValue($username === 'editor' ? 403 : 200, $response['status'], '設定画面の閲覧権限: ' . $username);
+
+        if ($username === 'admin') {
+            $validForms = [
+                'allowed-ip/add' => ['ip' => '::ffff:127.0.0.1'],
+                'login-access' => ['enabled' => '1'],
+                'admin-access' => ['enabled' => '1'],
+                'login-url' => ['enabled' => '1', 'slug' => 'secure-entry'],
+                'login-lock' => ['enabled' => '1', 'attempts' => '5', 'duration' => '30'],
+                'fail-once' => ['enabled' => '1', 'count' => '1'],
+                'denied-ip/add' => ['ip' => '2001:0DB8:0000:0000:0000:0000:0000:0001'],
+                'denied-ip/remove' => ['ip' => '2001:db8::1'],
+            ];
+
+            foreach ($validForms as $action => $values) {
+                $response = request($client, $baseUrl, 'POST', $settingsBase . $action,
+                    ['_csrf_token' => $token] + $values);
+                assertSameValue(302, $response['status'], '管理者の保存成功: ' . $action);
+            }
+
+            $settings = json_decode(file_get_contents($settingsPath), true);
+            assertSameValue(['127.0.0.1'], $settings['allowed_ips'], '登録時にIPv4射影表記を正規化');
+            assertSameValue([], $settings['denied_ips'], 'IPv6の別表記から拒否IPを削除');
+            assertSameValue(true, $settings['admin_page_access']['enabled'], '管理者による保護設定の有効化');
+
+            foreach (['denied-ip/add', 'allowed-ip/remove'] as $action) {
+                $response = request($client, $baseUrl, 'POST', $settingsBase . $action, [
+                    '_csrf_token' => $token, 'ip' => '::ffff:127.0.0.1',
+                ]);
+                assertSameValue(302, $response['status'], '自己締め出しをエラー通知へ戻す: ' . $action);
+            }
+
+            $settings = json_decode(file_get_contents($settingsPath), true);
+            assertSameValue(['127.0.0.1'], $settings['allowed_ips'], '別表記で自分の許可IPを削除できない');
+            assertSameValue([], $settings['denied_ips'], '別表記で自分を拒否IPに登録できない');
+
+            request($client, $baseUrl, 'POST', $settingsBase . 'login-access', ['_csrf_token' => $token]);
+            request($client, $baseUrl, 'POST', $settingsBase . 'admin-access', ['_csrf_token' => $token]);
+            $response = request($client, $baseUrl, 'POST', $settingsBase . 'allowed-ip/remove', [
+                '_csrf_token' => $token, 'ip' => '::ffff:127.0.0.1',
+            ]);
+            assertSameValue(302, $response['status'], '制限解除後の許可IP削除');
+            $settings = json_decode(file_get_contents($settingsPath), true);
+            assertSameValue([], $settings['allowed_ips'], '制限解除後は許可IPを削除できる');
+        }
+
+        curl_close($client);
+    }
+
+    /* 設定JSONの破損・型不正・消失はいずれも保護解除せず503。 */
+    configureExtension($runtimeDirectory, true);
+    $goodSettings = file_get_contents($settingsPath);
+    $client = newClient();
+
+    foreach (['{', '{}', '{"admin_page_access":{"enabled":false}}'] as $invalid) {
+        file_put_contents($settingsPath, $invalid);
+
+        foreach (['/admin', '/secure-entry'] as $path) {
+            $response = request($client, $baseUrl, 'GET', $path);
+            assertSameValue(503, $response['status'], '設定異常時は停止: ' . $path);
+            assertNotContainsText('name="password"', $response['body'], '異常時にログイン画面を公開しない');
+        }
+    }
+
+    file_put_contents($settingsPath . '.bak', $goodSettings);
+    unlink($settingsPath);
+    $response = request($client, $baseUrl, 'GET', '/admin');
+    assertSameValue(503, $response['status'], '既存設定の消失も503');
+    file_put_contents($settingsPath, $goodSettings);
+    $response = request($client, $baseUrl, 'GET', '/secure-entry');
+    assertSameValue(200, $response['status'], '復旧後にログイン画面へ戻れる');
+
+    /* アカウントのロックは新しいIPのHTTPリクエストにも適用する。 */
+    configureExtension($runtimeDirectory, true, ['login_lock' => ['enabled' => true]]);
+    $response = request($client, $baseUrl, 'GET', '/secure-entry');
+    $token = csrfToken($response['body']);
+    $locksPath = $runtimeDirectory . '/storage/extensions/access-guard/login-locks.json';
+    writeJson($locksPath, [
+        'account:' . hash('sha256', 'admin') => [
+            'count' => 5, 'updated_at' => time(), 'locked_until' => time() + 600,
+            'next_attempt_at' => 0,
+        ],
+    ]);
+    $response = request($client, $baseUrl, 'POST', '/secure-entry', [
+        '_csrf_token' => $token, 'username' => 'ADMIN', 'password' => 'correct-password',
+    ]);
+    assertSameValue(200, $response['status'], 'IPの履歴がなくてもアカウントロックを適用');
+    assertContainsText('一時的にロックされています', $response['body'], '正しい認証情報でもロックを維持');
+    assertContainsText('Retry-After:', $response['headers'], '待機時間をヘッダーで通知');
+
+    file_put_contents($locksPath, '{');
+    $response = request($client, $baseUrl, 'POST', '/secure-entry', [
+        '_csrf_token' => $token, 'username' => 'admin', 'password' => 'correct-password',
+    ]);
+    assertSameValue(503, $response['status'], 'ロック情報破損時は認証せず503');
+    curl_close($client);
+    require __DIR__ . '/feature-http.php';
 } finally {
     proc_terminate($process);
     proc_close($process);

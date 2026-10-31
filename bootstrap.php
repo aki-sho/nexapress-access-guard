@@ -19,9 +19,16 @@ if (
  * 拡張機能のPHPファイルを読み込む
  */
 $includeFiles = [
+    __DIR__ . '/includes/JsonStorage.php',
     __DIR__ . '/includes/Settings.php',
     __DIR__ . '/includes/SettingsController.php',
     __DIR__ . '/includes/IpRules.php',
+    __DIR__ . '/includes/Totp.php',
+    __DIR__ . '/includes/SecretCipher.php',
+    __DIR__ . '/includes/TwoFactor.php',
+    __DIR__ . '/includes/TwoFactorController.php',
+    __DIR__ . '/includes/Notification.php',
+    __DIR__ . '/includes/AuditLog.php',
     __DIR__ . '/includes/LoginUrl.php',
     __DIR__ . '/includes/LoginLock.php',
     __DIR__ . '/includes/FailOnce.php',
@@ -39,6 +46,11 @@ foreach ($includeFiles as $includeFile) {
  */
 $settingsBase =
     '/admin/extensions/access-guard/settings';
+
+$router->get('/admin/access-guard/two-factor', NexaPressAccessGuard\TwoFactorController::class . '@show');
+$router->post('/admin/access-guard/two-factor', NexaPressAccessGuard\TwoFactorController::class . '@save');
+$router->post($settingsBase . '/trusted-proxy', SettingsController::class . '@saveTrustedProxy');
+$router->post($settingsBase . '/monitoring', SettingsController::class . '@saveMonitoring');
 
 $router->post(
     $settingsBase . '/login-access',

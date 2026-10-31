@@ -2,283 +2,219 @@
 
 namespace NexaPressAccessGuard;
 
-use RuntimeException;
-
-/*
- * ログイン失敗回数と一時ロックを管理
- */
+/* IPとアカウントの両方でログイン失敗・待機時間を管理する。 */
 class LoginLock
 {
-    /*
-     * 現在ロック中か確認
-     */
-    public static function isLocked(
-        string $ip
-    ): bool {
-        if (!self::isEnabled()) {
-            return false;
-        }
+    private const OBSERVATION_SECONDS = 900;
 
-        return self::withData(
-            static function (
-                array &$data
-            ) use ($ip): bool {
-                if (!isset($data[$ip])) {
-                    return false;
-                }
-
-                $lockedUntil = (int)(
-                    $data[$ip]['locked_until'] ?? 0
-                );
-
-                if ($lockedUntil <= time()) {
-                    if ($lockedUntil > 0) {
-                        unset($data[$ip]);
-                    }
-
-                    return false;
-                }
-
-                return true;
-            }
-        );
+    public static function isLocked(string $ip, string $username = ''): bool
+    {
+        return self::retryAfterSeconds($ip, $username) > 0;
     }
 
-    /*
-     * ログイン失敗を記録
-     *
-     * 戻り値：
-     * true  ロックされた
-     * false まだロックされていない
-     */
-    public static function recordFailure(
-        string $ip
-    ): bool {
-        if (!self::isEnabled()) {
-            return false;
-        }
-
-        $setting = Settings::get(
-            'login_lock',
-            []
-        );
-
-        $attempts = max(
-            1,
-            (int)($setting['attempts'] ?? 5)
-        );
-
-        $duration = max(
-            1,
-            (int)($setting['duration'] ?? 30)
-        );
-
-        return self::withData(
-            static function (
-                array &$data
-            ) use (
-                $ip,
-                $attempts,
-                $duration
-            ): bool {
-                $entry = $data[$ip] ?? [
-                    'count' => 0,
-                    'locked_until' => 0,
-                    'updated_at' => 0,
-                ];
-
-                /*
-                 * すでにロック中
-                 */
-                if (
-                    (int)$entry['locked_until'] >
-                    time()
-                ) {
-                    return true;
-                }
-
-                $entry['count'] =
-                    (int)$entry['count'] + 1;
-
-                $entry['updated_at'] = time();
-
-                /*
-                 * 上限に到達
-                 */
-                if (
-                    $entry['count'] >=
-                    $attempts
-                ) {
-                    $entry['count'] = 0;
-
-                    $entry['locked_until'] =
-                        time() +
-                        ($duration * 60);
-
-                    $data[$ip] = $entry;
-
-                    return true;
-                }
-
-                $entry['locked_until'] = 0;
-
-                $data[$ip] = $entry;
-
-                return false;
-            }
-        );
-    }
-
-    /*
-     * 残りロック時間を分で取得
-     */
-    public static function remainingMinutes(
-        string $ip
-    ): int {
+    public static function retryAfterSeconds(string $ip, string $username = ''): int
+    {
         if (!self::isEnabled()) {
             return 0;
         }
 
-        return self::withData(
-            static function (
-                array &$data
-            ) use ($ip): int {
-                $lockedUntil = (int)(
-                    $data[$ip]['locked_until'] ?? 0
-                );
+        $data = JsonStorage::read(self::storagePath(), [], [self::class, 'validate']);
+        $waitUntil = 0;
 
-                if ($lockedUntil <= time()) {
-                    unset($data[$ip]);
+        foreach (self::keys($ip, $username) as $key) {
+            $entry = $data[$key] ?? [];
+            $waitUntil = max(
+                $waitUntil,
+                $entry['locked_until'] ?? 0,
+                $entry['next_attempt_at'] ?? 0
+            );
+        }
 
-                    return 0;
+        return max(0, $waitUntil - time());
+    }
+
+    public static function recordFailure(string $ip, string $username = ''): bool
+    {
+        if (!self::isEnabled()) {
+            return false;
+        }
+
+        $setting = Settings::get('login_lock');
+
+        return JsonStorage::update(
+            self::storagePath(),
+            [],
+            [self::class, 'validate'],
+            static function (array &$data) use ($ip, $username, $setting): bool {
+                $now = time();
+                self::removeExpired($data, $now);
+                $locked = false;
+
+                foreach (self::keys($ip, $username) as $key) {
+                    $entry = $data[$key] ?? [
+                        'count' => 0,
+                        'locked_until' => 0,
+                        'updated_at' => $now,
+                        'next_attempt_at' => 0,
+                    ];
+
+                    if ($entry['locked_until'] > $now) {
+                        $locked = true;
+                        continue;
+                    }
+
+                    $entry['count']++;
+                    $entry['updated_at'] = $now;
+
+                    if ($entry['count'] >= $setting['attempts']) {
+                        $entry['locked_until'] = $now + $setting['duration'] * 60;
+                        $entry['next_attempt_at'] = 0;
+                        $locked = true;
+                    } else {
+                        // 2回目以降は1・2・4…秒（最大30秒）の待機。
+                        $entry['next_attempt_at'] = $entry['count'] < 2
+                            ? 0
+                            : $now + min(30, 2 ** min(5, $entry['count'] - 2));
+                    }
+
+                    $data[$key] = $entry;
                 }
 
-                return max(
-                    1,
-                    (int)ceil(
-                        ($lockedUntil - time()) /
-                        60
-                    )
-                );
-            }
+                return $locked;
+            },
+            true
         );
     }
 
-    /*
-     * ログイン失敗情報を削除
-     */
-    public static function clear(
-        string $ip
-    ): void {
-        self::withData(
-            static function (
-                array &$data
-            ) use ($ip): null {
-                unset($data[$ip]);
+    public static function remainingMinutes(string $ip, string $username = ''): int
+    {
+        return (int)ceil(self::retryAfterSeconds($ip, $username) / 60);
+    }
 
-                return null;
-            }
+    /* 成功したアカウントだけをリセットし、IP全体の攻撃履歴は残す。 */
+    public static function clear(string $ip, string $username = ''): bool
+    {
+        if (!self::isEnabled()) {
+            return true;
+        }
+
+        return JsonStorage::update(
+            self::storagePath(),
+            [],
+            [self::class, 'validate'],
+            static function (array &$data) use ($ip, $username): bool {
+                $keys = self::keys($ip, $username);
+
+                // 最終ロック確認と成功時のリセットを同じロック内で行う。
+                foreach ($keys as $key) {
+                    $entry = $data[$key] ?? [];
+
+                    if (max($entry['locked_until'] ?? 0, $entry['next_attempt_at'] ?? 0) > time()) {
+                        return false;
+                    }
+                }
+
+                $key = trim($username) === '' ? $keys[0] : $keys[1];
+                unset($data[$key]);
+                self::removeExpired($data, time());
+
+                return true;
+            },
+            true
         );
     }
 
-    /*
-     * ログインロックが有効か確認
-     */
+    private static function keys(string $ip, string $username): array
+    {
+        // IPのキーは従来形式を維持し、既存のロックを引き継ぐ。
+        $keys = [IpRules::normalize($ip) ?? 'unknown'];
+
+        if (trim($username) !== '') {
+            $keys[] = 'account:' . hash('sha256', strtolower(trim($username)));
+        }
+
+        return $keys;
+    }
+
+    public static function reset(?string $ip, string $username): void
+    {
+        $keys = [];
+
+        if ($ip !== null) {
+            $keys[] = IpRules::normalize($ip) ?? 'unknown';
+        }
+
+        if (trim($username) !== '') {
+            $keys[] = 'account:' . hash('sha256', strtolower(trim($username)));
+        }
+
+        JsonStorage::update(self::storagePath(), [], [self::class, 'validate'],
+            static function (array &$data) use ($keys): void {
+                foreach ($keys as $key) {
+                    unset($data[$key]);
+                }
+            }, true);
+    }
+
+    public static function validate(array $data): array
+    {
+        $normalized = [];
+
+        foreach ($data as $key => $entry) {
+            $ip = is_string($key) ? IpRules::normalize($key) : null;
+
+            if ($ip === null && $key !== 'unknown' &&
+                (!is_string($key) || !preg_match('/^account:[a-f0-9]{64}$/', $key))) {
+                throw new StorageException('ログインロックのキーが正しくありません。');
+            }
+
+            if (!is_array($entry)) {
+                throw new StorageException('ログインロックの形式が正しくありません。');
+            }
+
+            // 旧版にない待機時刻は0として読み込める。
+            $entry['next_attempt_at'] = $entry['next_attempt_at'] ?? 0;
+
+            foreach (['count', 'locked_until', 'updated_at', 'next_attempt_at'] as $field) {
+                if (!isset($entry[$field]) || !is_int($entry[$field]) || $entry[$field] < 0) {
+                    throw new StorageException('ログインロックの値が正しくありません。');
+                }
+            }
+
+            $key = $ip ?? $key;
+
+            if (isset($normalized[$key])) {
+                foreach (['count', 'locked_until', 'updated_at', 'next_attempt_at'] as $field) {
+                    $entry[$field] = max($entry[$field], $normalized[$key][$field]);
+                }
+            }
+
+            $normalized[$key] = $entry;
+        }
+
+        return $normalized;
+    }
+
+    private static function removeExpired(array &$data, int $now): void
+    {
+        foreach ($data as $key => $entry) {
+            $expiredLock = $entry['locked_until'] > 0 && $entry['locked_until'] <= $now;
+            $expiredFailures = $entry['locked_until'] === 0 &&
+                $entry['updated_at'] + self::OBSERVATION_SECONDS <= $now;
+
+            if ($expiredLock || $expiredFailures) {
+                unset($data[$key]);
+            }
+        }
+    }
+
     private static function isEnabled(): bool
     {
-        $setting = Settings::get(
-            'login_lock',
-            []
-        );
-
-        return !empty($setting['enabled']);
+        return Settings::get('login_lock')['enabled'];
     }
 
-    /*
-     * ロックファイルを安全に読み書き
-     */
-    private static function withData(
-        callable $callback
-    ): mixed {
-        $path = self::storagePath();
-        $directory = dirname($path);
-
-        if (
-            !is_dir($directory) &&
-            !mkdir($directory, 0755, true)
-        ) {
-            throw new RuntimeException(
-                'ログインロック保存フォルダを作成できません。'
-            );
-        }
-
-        $handle = fopen($path, 'c+');
-
-        if ($handle === false) {
-            throw new RuntimeException(
-                'ログインロック情報を開けません。'
-            );
-        }
-
-        try {
-            if (!flock($handle, LOCK_EX)) {
-                throw new RuntimeException(
-                    'ログインロック情報を固定できません。'
-                );
-            }
-
-            rewind($handle);
-
-            $json = stream_get_contents($handle);
-
-            $data = json_decode(
-                (string)$json,
-                true
-            );
-
-            if (!is_array($data)) {
-                $data = [];
-            }
-
-            $result = $callback($data);
-
-            $encoded = json_encode(
-                $data,
-                JSON_UNESCAPED_UNICODE |
-                JSON_UNESCAPED_SLASHES |
-                JSON_PRETTY_PRINT
-            );
-
-            if ($encoded === false) {
-                throw new RuntimeException(
-                    'ログインロック情報を作成できません。'
-                );
-            }
-
-            rewind($handle);
-            ftruncate($handle, 0);
-
-            if (fwrite($handle, $encoded) === false) {
-                throw new RuntimeException(
-                    'ログインロック情報を保存できません。'
-                );
-            }
-
-            fflush($handle);
-
-            return $result;
-        } finally {
-            flock($handle, LOCK_UN);
-            fclose($handle);
-        }
-    }
-
-    /*
-     * 保存場所
-     */
     private static function storagePath(): string
     {
-        return BASE_PATH
-            . '/storage/extensions/access-guard/login-locks.json';
+        return BASE_PATH . '/storage/extensions/access-guard/login-locks.json';
     }
 }
