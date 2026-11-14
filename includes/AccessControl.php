@@ -24,10 +24,9 @@ class AccessControl
 
     private static function enforce(Router $router): void
     {
-        /*
-         * ログイン用ルートを登録
-         */
-        LoginUrl::register($router);
+        Settings::ensureInitialized();
+        $settings = Settings::all();
+        LoginUrl::register($router, $settings['login_url']);
 
         $path = self::requestPath();
         $ip = IpRules::currentIp();
@@ -62,8 +61,15 @@ class AccessControl
          */
         if (self::isAdminPath($path)) {
             self::checkAdminPageAccess($ip);
+            if ($path === '/admin/logout') {
+                return;
+            }
+
             self::checkSecondFactorSession();
-            self::redirectGuestToLogin();
+            if ($settings['login_url']['enabled'] && !Auth::check()) {
+                (new LoginUrl())->notFound();
+                exit;
+            }
         }
     }
 
@@ -79,33 +85,8 @@ class AccessControl
         if ($version !== null && !hash_equals($version, (string)($_SESSION['access_guard_mfa_verified'] ?? ''))) {
             Auth::logout();
             unset($_SESSION['access_guard_mfa_verified'], $_SESSION['access_guard_pending_login']);
-            redirect_to(ltrim(LoginUrl::path(), '/'));
+            redirect_to('');
         }
-    }
-
-    /*
-     * ログインURL変更中の未ログインユーザーを誘導
-     */
-    private static function redirectGuestToLogin(): void
-    {
-        $setting = Settings::get(
-            'login_url',
-            []
-        );
-
-        if (
-            empty($setting['enabled']) ||
-            Auth::check()
-        ) {
-            return;
-        }
-
-        redirect_to(
-            ltrim(
-                LoginUrl::path(),
-                '/'
-            )
-        );
     }
 
     /*

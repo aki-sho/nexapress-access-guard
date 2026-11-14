@@ -6,34 +6,31 @@ namespace NexaPressAccessGuard;
 class LoginLock
 {
     private const OBSERVATION_SECONDS = 900;
+    private const ACCOUNT_WAIT_SECONDS = 30;
 
     public static function isLocked(string $ip, string $username = ''): bool
     {
         return self::retryAfterSeconds($ip, $username) > 0;
     }
 
-    public static function retryAfterSeconds(string $ip, string $username = ''): int
+    public static function retryAfterSeconds(string $ip, string $username = '', bool $trusted = false): int
     {
         if (!self::isEnabled()) {
             return 0;
         }
 
         $data = JsonStorage::read(self::storagePath(), [], [self::class, 'validate']);
-        $waitUntil = 0;
+        $now = time();
+        $wait = 0;
 
-        foreach (self::keys($ip, $username) as $key) {
-            $entry = $data[$key] ?? [];
-            $waitUntil = max(
-                $waitUntil,
-                $entry['locked_until'] ?? 0,
-                $entry['next_attempt_at'] ?? 0
-            );
+        foreach (self::keys($ip, $trusted ? '' : $username) as $key) {
+            $wait = max($wait, self::waitUntil($key, $data[$key] ?? []) - $now);
         }
 
-        return max(0, $waitUntil - time());
+        return $wait;
     }
 
-    public static function recordFailure(string $ip, string $username = ''): bool
+    public static function recordFailure(string $ip, string $username = '', bool $trusted = false): bool
     {
         if (!self::isEnabled()) {
             return false;
@@ -45,12 +42,12 @@ class LoginLock
             self::storagePath(),
             [],
             [self::class, 'validate'],
-            static function (array &$data) use ($ip, $username, $setting): bool {
+            static function (array &$data) use ($ip, $username, $setting, $trusted): bool {
                 $now = time();
                 self::removeExpired($data, $now);
                 $locked = false;
 
-                foreach (self::keys($ip, $username) as $key) {
+                foreach (self::keys($ip, $trusted ? '' : $username) as $key) {
                     $entry = $data[$key] ?? [
                         'count' => 0,
                         'locked_until' => 0,
@@ -67,7 +64,9 @@ class LoginLock
                     $entry['updated_at'] = $now;
 
                     if ($entry['count'] >= $setting['attempts']) {
-                        $entry['locked_until'] = $now + $setting['duration'] * 60;
+                        $entry['locked_until'] = $now + (str_starts_with($key, 'account:')
+                            ? self::ACCOUNT_WAIT_SECONDS
+                            : $setting['duration'] * 60);
                         $entry['next_attempt_at'] = 0;
                         $locked = true;
                     } else {
@@ -92,7 +91,7 @@ class LoginLock
     }
 
     /* 成功したアカウントだけをリセットし、IP全体の攻撃履歴は残す。 */
-    public static function clear(string $ip, string $username = ''): bool
+    public static function clear(string $ip, string $username = '', bool $trusted = false): bool
     {
         if (!self::isEnabled()) {
             return true;
@@ -102,21 +101,18 @@ class LoginLock
             self::storagePath(),
             [],
             [self::class, 'validate'],
-            static function (array &$data) use ($ip, $username): bool {
-                $keys = self::keys($ip, $username);
-
-                // 最終ロック確認と成功時のリセットを同じロック内で行う。
-                foreach ($keys as $key) {
-                    $entry = $data[$key] ?? [];
-
-                    if (max($entry['locked_until'] ?? 0, $entry['next_attempt_at'] ?? 0) > time()) {
+            static function (array &$data) use ($ip, $username, $trusted): bool {
+                $now = time();
+                // ロックの最終確認とカウンタのリセットを同じ排他ロック内で行う。
+                foreach (self::keys($ip, $trusted ? '' : $username) as $key) {
+                    if (self::waitUntil($key, $data[$key] ?? []) > $now) {
                         return false;
                     }
                 }
 
-                $key = trim($username) === '' ? $keys[0] : $keys[1];
+                $key = trim($username) === '' ? self::keys($ip, '')[0] : self::accountKey($username);
                 unset($data[$key]);
-                self::removeExpired($data, time());
+                self::removeExpired($data, $now);
 
                 return true;
             },
@@ -130,10 +126,25 @@ class LoginLock
         $keys = [IpRules::normalize($ip) ?? 'unknown'];
 
         if (trim($username) !== '') {
-            $keys[] = 'account:' . hash('sha256', strtolower(trim($username)));
+            $keys[] = self::accountKey($username);
         }
 
         return $keys;
+    }
+
+    private static function accountKey(string $username): string
+    {
+        return 'account:' . hash('sha256', strtolower(trim($username)));
+    }
+
+    private static function waitUntil(string $key, array $entry): int
+    {
+        $until = $entry['locked_until'] ?? 0;
+        if (str_starts_with($key, 'account:')) {
+            $until = min($until, ($entry['updated_at'] ?? 0) + self::ACCOUNT_WAIT_SECONDS);
+        }
+
+        return max($until, $entry['next_attempt_at'] ?? 0);
     }
 
     public static function reset(?string $ip, string $username): void
@@ -145,7 +156,7 @@ class LoginLock
         }
 
         if (trim($username) !== '') {
-            $keys[] = 'account:' . hash('sha256', strtolower(trim($username)));
+            $keys[] = self::accountKey($username);
         }
 
         JsonStorage::update(self::storagePath(), [], [self::class, 'validate'],
@@ -198,7 +209,7 @@ class LoginLock
     private static function removeExpired(array &$data, int $now): void
     {
         foreach ($data as $key => $entry) {
-            $expiredLock = $entry['locked_until'] > 0 && $entry['locked_until'] <= $now;
+            $expiredLock = $entry['locked_until'] > 0 && self::waitUntil($key, $entry) <= $now;
             $expiredFailures = $entry['locked_until'] === 0 &&
                 $entry['updated_at'] + self::OBSERVATION_SECONDS <= $now;
 

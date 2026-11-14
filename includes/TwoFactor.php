@@ -13,7 +13,13 @@ class TwoFactor
 
     public static function all(): array
     {
-        return JsonStorage::read(self::path(), [], [self::class, 'validate']);
+        $initialized = JsonStorage::isInitialized() || is_file(dirname(self::path()) . '/two-factor.key');
+        return JsonStorage::read(self::path(), [], [self::class, 'validate'], $initialized);
+    }
+
+    public static function initialize(): void
+    {
+        JsonStorage::initialize(self::path(), [], [self::class, 'validate'], is_file(dirname(self::path()) . '/two-factor.key'));
     }
 
     public static function enabled(int $id): bool
@@ -34,6 +40,7 @@ class TwoFactor
             throw new RuntimeException('確認コードが正しくありません。');
         }
 
+        self::initialize();
         $codes = self::recoveryCodes();
         $encrypted = SecretCipher::encrypt($secret, $id);
 
@@ -51,7 +58,7 @@ class TwoFactor
                     'failures' => 0,
                     'locked_until' => 0,
                 ];
-            }, true);
+            }, true, true);
 
         return $codes;
     }
@@ -123,13 +130,14 @@ class TwoFactor
                 $result['version'] = $action === 'disable' ? null : $entry['version'];
 
                 return $result;
-            }, true);
+            }, true, true);
     }
 
     public static function reset(int $id): void
     {
+        self::initialize();
         JsonStorage::update(self::path(), [], [self::class, 'validate'],
-            static function (array &$data) use ($id): void { unset($data[$id]); }, true);
+            static function (array &$data) use ($id): void { unset($data[$id]); }, true, true);
     }
 
     private static function recoveryCodes(): array

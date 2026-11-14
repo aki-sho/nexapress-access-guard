@@ -67,8 +67,23 @@ class Settings
         return JsonStorage::read(
             self::settingsPath(),
             self::defaults(),
-            [self::class, 'validate']
+            [self::class, 'validate'],
+            JsonStorage::isInitialized()
         );
+    }
+
+    public static function initialize(): void
+    {
+        JsonStorage::initialize(self::settingsPath(), self::defaults(), [self::class, 'validate']);
+    }
+
+    public static function ensureInitialized(): void
+    {
+        if (!JsonStorage::isInitialized()) {
+            self::initialize();
+            TwoFactor::initialize();
+            JsonStorage::markInitialized();
+        }
     }
 
     /*
@@ -188,7 +203,8 @@ class Settings
                 $before = $settings;
                 $callback($settings);
             },
-            true
+            true,
+            JsonStorage::isInitialized()
         );
 
         if (class_exists(AuditLog::class)) {

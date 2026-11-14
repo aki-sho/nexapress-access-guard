@@ -28,6 +28,13 @@ namespace {
 
     session_start();
 
+    if (!is_file($runtimeDirectory . '/test-legacy-core')) {
+        function nx_logout_form(): void
+        {
+            // The fixture exposes the current core feature to exercise POST-only logout.
+        }
+    }
+
     function url(string $path = ''): string
     {
         $path = trim($path, '/');
@@ -227,7 +234,7 @@ namespace app\Models {
         public static function findByUsername(
             string $username
         ): ?array {
-            $username = strtolower($username);
+            $username = strtr(strtolower($username), ['á' => 'a']);
 
             if (!in_array($username, ['admin', 'editor'], true)) {
                 return null;

@@ -6,6 +6,11 @@ use Throwable;
 
 class AuditLog
 {
+    private const ROUTINE_EVENTS = [
+        'access_denied', 'login_failure', 'login_locked', 'mfa_failure',
+        'login_success', 'logout', 'recovery_used',
+    ];
+
     public static function path(): string
     {
         return BASE_PATH . '/storage/extensions/access-guard/audit.json';
@@ -30,7 +35,7 @@ class AuditLog
                     $data[] = $entry;
                     $cutoff = time() - $settings['audit']['retention_days'] * 86400;
                     $data = array_values(array_filter($data, static fn(array $row): bool => $row['time'] >= $cutoff));
-                    $data = array_slice($data, -2000);
+                    $data = array_slice(self::capRoutineEvents($data, 1000), -2000);
 
                     return count(array_filter($data, static fn(array $row): bool =>
                         $row['time'] >= time() - 300 && in_array($row['event'], ['login_failure', 'mfa_failure'], true)));
@@ -48,7 +53,18 @@ class AuditLog
         $data = JsonStorage::read(self::path(), [], [self::class, 'validate']);
         $data = array_filter($data, static fn(array $row): bool => $row['time'] >= $cutoff);
 
-        return array_reverse(array_slice(array_values($data), -100));
+        return array_reverse(array_slice(self::capRoutineEvents($data, 50), -100));
+    }
+
+    private static function capRoutineEvents(array $data, int $maximum): array
+    {
+        $indices = array_keys(array_filter($data, static fn(array $row): bool =>
+            in_array($row['event'], self::ROUTINE_EVENTS, true)));
+        foreach (array_slice($indices, 0, max(0, count($indices) - $maximum)) as $index) {
+            unset($data[$index]);
+        }
+
+        return array_values($data);
     }
 
     public static function validate(array $data): array

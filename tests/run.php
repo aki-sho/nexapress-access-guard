@@ -174,7 +174,7 @@ function configureExtension(
     );
 
     foreach (
-        ['login-locks.json', 'login-locks.json.bak', 'fail-once.json', 'settings.json.bak', 'two-factor.json', 'two-factor.json.bak']
+        ['login-locks.json', 'login-locks.json.bak', 'fail-once.json', 'settings.json.bak']
         as $fileName
     ) {
         $path = $runtimeDirectory
@@ -185,6 +185,8 @@ function configureExtension(
             unlink($path);
         }
     }
+
+    writeJson($runtimeDirectory . '/storage/extensions/access-guard/two-factor.json', []);
 }
 
 function newClient()
@@ -436,7 +438,7 @@ try {
     );
     curl_close($client);
 
-    /* 変更後URLの表示・認証・旧URL・管理画面誘導 */
+    /* 変更後URLの表示・認証・旧URL・管理画面の応答 */
     configureExtension(
         $runtimeDirectory,
         true
@@ -513,11 +515,26 @@ try {
         'ログイン済み管理画面の内容'
     );
 
+    $token = csrfToken($response['body']);
+    $response = request($client, $baseUrl, 'GET', '/admin/logout');
+    assertSameValue(404, $response['status'], 'GETではログアウトしない');
+    $legacyMarker = $runtimeDirectory . '/test-legacy-core';
+    file_put_contents($legacyMarker, '1');
+    $response = request($client, $baseUrl, 'GET', '/admin/logout');
+    assertSameValue(200, $response['status'], '旧本体のログアウトリンクは確認画面を開く');
+    assertSameValue($token, csrfToken($response['body']), '旧本体の確認画面は現在のセッションを維持');
+    unlink($legacyMarker);
+    $response = request($client, $baseUrl, 'POST', '/admin/logout', ['_csrf_token' => 'invalid']);
+    assertSameValue(419, $response['status'], 'CSRFトークンはログアウトにも必要');
+    $response = request($client, $baseUrl, 'GET', '/admin');
+    assertSameValue(200, $response['status'], '無効なログアウト後もセッションを維持');
+
     $response = request(
         $client,
         $baseUrl,
-        'GET',
-        '/admin/logout'
+        'POST',
+        '/admin/logout',
+        ['_csrf_token' => $token]
     );
     assertSameValue(
         302,
@@ -565,15 +582,15 @@ try {
             $adminPath
         );
         assertSameValue(
-            302,
+            404,
             $response['status'],
-            '未ログイン管理画面からの誘導: '
+            '未ログイン管理画面は404: '
                 . $adminPath
         );
         assertSameValue(
-            '/secure-entry',
+            null,
             location($response),
-            '未ログイン管理画面の遷移先: '
+            '未ログイン管理画面の応答に転送先がない: '
                 . $adminPath
         );
     }
@@ -917,14 +934,14 @@ try {
         '/admin'
     );
     assertSameValue(
-        302,
+        404,
         $response['status'],
-        '許可IPの未ログイン管理画面はログインへ誘導'
+        '許可IPでも未ログインの管理画面は404'
     );
     assertSameValue(
-        '/secure-entry',
+        null,
         location($response),
-        '許可IPの管理画面から変更後URLへ誘導'
+        '許可IPでも未ログイン時は変更後URLを開示しない'
     );
     curl_close($client);
 
@@ -1060,7 +1077,19 @@ try {
     unlink($settingsPath);
     $response = request($client, $baseUrl, 'GET', '/admin');
     assertSameValue(503, $response['status'], '既存設定の消失も503');
+    unlink($settingsPath . '.bak');
+    $response = request($client, $baseUrl, 'GET', '/admin');
+    assertSameValue(503, $response['status'], '設定とバックアップの両方を失っても初期化しない');
     file_put_contents($settingsPath, $goodSettings);
+    $mfaPath = dirname($settingsPath) . '/two-factor.json';
+    unlink($mfaPath);
+    unlink($mfaPath . '.bak');
+    $response = request($client, $baseUrl, 'POST', '/secure-entry', [
+        '_csrf_token' => csrfToken(request($client, $baseUrl, 'GET', '/secure-entry')['body']),
+        'username' => 'admin', 'password' => 'correct-password',
+    ]);
+    assertSameValue(503, $response['status'], '二要素認証データとバックアップを失うと認証を停止');
+    writeJson($mfaPath, []);
     $response = request($client, $baseUrl, 'GET', '/secure-entry');
     assertSameValue(200, $response['status'], '復旧後にログイン画面へ戻れる');
 
@@ -1076,11 +1105,23 @@ try {
         ],
     ]);
     $response = request($client, $baseUrl, 'POST', '/secure-entry', [
-        '_csrf_token' => $token, 'username' => 'ADMIN', 'password' => 'correct-password',
+        '_csrf_token' => $token, 'username' => 'ádmin', 'password' => 'correct-password',
     ]);
     assertSameValue(200, $response['status'], 'IPの履歴がなくてもアカウントロックを適用');
     assertContainsText('一時的にロックされています', $response['body'], '正しい認証情報でもロックを維持');
     assertContainsText('Retry-After:', $response['headers'], '待機時間をヘッダーで通知');
+
+    $settings = json_decode($goodSettings, true);
+    $settings['login_lock']['enabled'] = true;
+    $settings['allowed_ips'] = ['127.0.0.1'];
+    writeJson($settingsPath, $settings);
+    $response = request($client, $baseUrl, 'POST', '/secure-entry', [
+        '_csrf_token' => $token, 'username' => 'admin', 'password' => 'correct-password',
+    ]);
+    assertSameValue(302, $response['status'], '許可IPからの正規ログインは外部のアカウントロックで阻まれない');
+    curl_close($client);
+    $client = newClient();
+    $token = csrfToken(request($client, $baseUrl, 'GET', '/secure-entry')['body']);
 
     file_put_contents($locksPath, '{');
     $response = request($client, $baseUrl, 'POST', '/secure-entry', [

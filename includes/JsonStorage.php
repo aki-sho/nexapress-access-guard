@@ -14,15 +14,48 @@ class StorageException extends RuntimeException
  */
 class JsonStorage
 {
+    private const INITIALIZED = '/storage/access-guard.initialized';
+
+    public static function isInitialized(): bool
+    {
+        return is_file(BASE_PATH . self::INITIALIZED);
+    }
+
+    public static function markInitialized(): void
+    {
+        $path = BASE_PATH . self::INITIALIZED;
+        self::withLock($path, LOCK_EX, static function () use ($path): void {
+            clearstatcache(true, $path);
+            if (!is_file($path)) {
+                self::replace($path, "1\n");
+            }
+        });
+    }
+
     public static function read(
         string $path,
         array $initial,
-        callable $validate
+        callable $validate,
+        bool $requireExisting = false
     ): array {
         return self::withLock($path, LOCK_SH, static function () use (
-            $path, $initial, $validate
+            $path, $initial, $validate, $requireExisting
         ): array {
-            return self::readUnlocked($path, $initial, $validate);
+            return self::readUnlocked($path, $initial, $validate, $requireExisting);
+        });
+    }
+
+    public static function initialize(string $path, array $initial, callable $validate, bool $required = false): void
+    {
+        self::withLock($path, LOCK_EX, static function () use ($path, $initial, $validate, $required): void {
+            $data = self::readUnlocked($path, $initial, $validate, $required || self::isInitialized());
+            $json = self::encode($data);
+            if (!is_file($path)) {
+                self::replace($path, $json);
+            }
+            if (!file_exists($path . '.bak')) {
+                self::replace($path . '.bak', $json);
+            }
         });
     }
 
@@ -31,24 +64,16 @@ class JsonStorage
         array $initial,
         callable $validate,
         callable $callback,
-        bool $backup = false
+        bool $backup = false,
+        bool $requireExisting = false
     ): mixed {
         return self::withLock($path, LOCK_EX, static function () use (
-            $path, $initial, $validate, $callback, $backup
+            $path, $initial, $validate, $callback, $backup, $requireExisting
         ): mixed {
-            $data = self::readUnlocked($path, $initial, $validate);
+            $data = self::readUnlocked($path, $initial, $validate, $requireExisting);
             $result = $callback($data);
             $data = $validate($data);
-            $json = json_encode(
-                $data,
-                JSON_UNESCAPED_UNICODE |
-                JSON_UNESCAPED_SLASHES |
-                JSON_PRETTY_PRINT
-            );
-
-            if ($json === false) {
-                throw new StorageException('保護データを作成できません。');
-            }
+            $json = self::encode($data);
 
             if ($backup) {
                 self::replace($path . '.bak', $json);
@@ -119,12 +144,13 @@ class JsonStorage
     private static function readUnlocked(
         string $path,
         array $initial,
-        callable $validate
+        callable $validate,
+        bool $requireExisting = false
     ): array {
         clearstatcache(true, $path);
 
         if (!file_exists($path)) {
-            if (file_exists($path . '.bak')) {
+            if ($requireExisting || file_exists($path . '.bak')) {
                 throw new StorageException('保護データが見つかりません。バックアップから復旧してください。');
             }
 
@@ -144,6 +170,16 @@ class JsonStorage
         }
 
         return $validate($data);
+    }
+
+    private static function encode(array $data): string
+    {
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        if ($json === false) {
+            throw new StorageException('保護データを作成できません。');
+        }
+
+        return $json;
     }
 
     private static function replace(string $path, string $json): void

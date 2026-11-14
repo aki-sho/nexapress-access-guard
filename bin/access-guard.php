@@ -29,7 +29,7 @@ if ($command === 'help') {
     echo "php bin/access-guard.php COMMAND --base-path=本体の絶対パス\n"
         . "  status                  保護設定と二要素認証の登録IDを表示\n"
         . "  disable-access          ログイン・管理IP制限、変更URL、プロキシを無効化\n"
-        . "  unlock --ip=IP --username=USER   指定したIP・アカウントのロック解除\n"
+        . "  unlock --ip=IP --username=USER   指定したIP・登録ユーザー名のロック解除\n"
         . "  allow-ip --ip=IP         指定IPを許可し、拒否IPから除外\n"
         . "  disable-two-factor --user-id=ID  指定した本人の二要素認証を解除\n"
         . "  restore --file=settings|login-locks|two-factor  バックアップから復旧\n";

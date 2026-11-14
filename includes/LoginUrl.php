@@ -17,13 +17,9 @@ class LoginUrl extends Controller
      * ログイン用ルートを登録
      */
     public static function register(
-        Router $router
+        Router $router,
+        array $setting
     ): void {
-        $setting = Settings::get(
-            'login_url',
-            []
-        );
-
         $enabled =
             !empty($setting['enabled']);
 
@@ -72,6 +68,10 @@ class LoginUrl extends Controller
          * ログアウト後も現在のログインURLへ戻す
          */
         $router->get(
+            '/admin/logout',
+            self::class . (function_exists('nx_logout_form') ? '@notFound' : '@confirmLogout')
+        );
+        $router->post(
             '/admin/logout',
             self::class . '@logout'
         );
@@ -149,7 +149,7 @@ class LoginUrl extends Controller
         /*
          * ロック中は認証処理を行わない
          */
-        if ($this->rejectLocked($ip, $username)) {
+        if ($this->rejectLocked($ip, '')) {
             return;
         }
 
@@ -166,6 +166,11 @@ class LoginUrl extends Controller
         }
 
         $user = User::findByUsername($username);
+        $account = (string)($user['username'] ?? '');
+
+        if ($account !== '' && $this->rejectLocked($ip, $account)) {
+            return;
+        }
 
         if (
             !$user ||
@@ -175,7 +180,7 @@ class LoginUrl extends Controller
             )
         ) {
             $locked =
-                LoginLock::recordFailure($ip, $username);
+                LoginLock::recordFailure($ip, $account, IpRules::isAllowed($ip));
             AuditLog::record('login_failure', $username);
 
             if ($locked) {
@@ -201,7 +206,7 @@ class LoginUrl extends Controller
         if (
             FailOnce::shouldReject(
                 $ip,
-                $username
+                $account
             )
         ) {
             $this->renderLogin(
@@ -239,7 +244,7 @@ class LoginUrl extends Controller
             return;
         }
 
-        if (!LoginLock::clear($ip, $username)) {
+        if (!LoginLock::clear($ip, $username, IpRules::isAllowed($ip))) {
             $this->renderLogin('ログインが一時的にロックされています。時間をおいて再度お試しください。');
             return;
         }
@@ -302,7 +307,7 @@ class LoginUrl extends Controller
 
         if (!$result['valid']) {
             AuditLog::record('mfa_failure', $pending['username']);
-            LoginLock::recordFailure($pending['ip'], $pending['username']);
+            LoginLock::recordFailure($pending['ip'], $pending['username'], IpRules::isAllowed($pending['ip']));
 
             if ($this->pendingLogin() === null) {
                 $this->renderLogin('認証に失敗しました。最初からログインしてください。');
@@ -347,7 +352,7 @@ class LoginUrl extends Controller
 
     private function rejectLocked(string $ip, string $username): bool
     {
-        $seconds = LoginLock::retryAfterSeconds($ip, $username);
+        $seconds = LoginLock::retryAfterSeconds($ip, $username, $username !== '' && IpRules::isAllowed($ip));
 
         if ($seconds <= 0) {
             return false;
@@ -368,6 +373,13 @@ class LoginUrl extends Controller
      */
     public function logout(): void
     {
+        Csrf::requireValid($_POST['_csrf_token'] ?? null);
+
+        if (!Auth::check()) {
+            $this->notFound();
+            return;
+        }
+
         AuditLog::record('logout');
         Auth::logout();
         unset($_SESSION['access_guard_pending_login'], $_SESSION['access_guard_mfa_verified'], $_SESSION['access_guard_enrollment']);
@@ -380,6 +392,34 @@ class LoginUrl extends Controller
                 '/'
             )
         );
+    }
+
+    public function confirmLogout(): void
+    {
+        if (!Auth::check()) {
+            $this->notFound();
+            return;
+        }
+
+        header('Cache-Control: no-store');
+        header("Content-Security-Policy: frame-ancestors 'none'");
+        header('X-Frame-Options: DENY');
+        $title = 'ログアウト';
+        $action = url('admin/logout');
+        $csrfToken = Csrf::token();
+        ob_start();
+        ?>
+        <div class="login-page"><div class="login-card">
+            <h1>ログアウト</h1>
+            <form action="<?= e($action) ?>" method="post">
+                <input type="hidden" name="_csrf_token" value="<?= e($csrfToken) ?>">
+                <button class="button full" type="submit">ログアウト</button>
+            </form>
+            <p class="login-back"><a href="<?= e(url('admin')) ?>">管理画面へ戻る</a></p>
+        </div></div>
+        <?php
+        $content = ob_get_clean();
+        require BASE_PATH . '/app/Views/admin/login-layout.php';
     }
 
     /*

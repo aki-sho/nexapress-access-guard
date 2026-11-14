@@ -182,7 +182,29 @@ namespace {
         checkFeature(LoginLock::isLocked('192.0.2.5', 'locked-user'), 'CLI解除前のロックを確認');
         checkFeature(featureCli('unlock', ['--ip=192.0.2.5', '--username=locked-user'])[0] === 0, 'CLIでIPとアカウントを解除する');
         checkFeature(!LoginLock::isLocked('192.0.2.5', 'locked-user'), '指定したロックが解除される');
-        checkFeature(featureCli('disable-two-factor', ['--user-id=2'])[0] === 0 && !TwoFactor::enabled(2), 'CLIで紛失した二要素認証を復旧する');
+
+        $auditPath = AuditLog::path();
+        $important = ['time' => time(), 'event' => 'settings_changed', 'username' => 'admin', 'ip' => '', 'details' => []];
+        $denied = array_replace($important, ['event' => 'access_denied', 'username' => '']);
+        file_put_contents($auditPath, json_encode(array_merge([$important], array_fill(0, 2000, $denied))));
+        AuditLog::record('access_denied');
+        $stored = json_decode(file_get_contents($auditPath), true);
+        checkFeature(count($stored) === 1001 && $stored[0] === $important, '拒否ログの上限で設定変更履歴を維持する');
+        checkFeature(in_array($important, AuditLog::recent(), true), '管理画面に重要な監査履歴を残す');
+
+        $twoFactorBackup = file_get_contents(TwoFactor::path() . '.bak');
+        unlink(TwoFactor::path());
+        unlink(TwoFactor::path() . '.bak');
+        try {
+            TwoFactor::initialize();
+            checkFeature(false, '旧版からの移行で二要素認証の消失を検出する');
+        } catch (\NexaPressAccessGuard\StorageException $exception) {
+            checkFeature(!is_file(TwoFactor::path()), '鍵が残っている場合は二要素認証を初期化しない');
+        }
+        checkFeature(featureCli('disable-two-factor', ['--user-id=2'])[0] !== 0 && !is_file(TwoFactor::path()), '認証データが消失したままアカウントを解除できない');
+        file_put_contents(TwoFactor::path() . '.bak', $twoFactorBackup);
+        checkFeature(featureCli('restore', ['--file=two-factor'])[0] === 0 && TwoFactor::enabled(2), 'CLIで二要素認証データを復元する');
+        checkFeature(featureCli('disable-two-factor', ['--user-id=2'])[0] === 0 && !TwoFactor::enabled(2), '復元後にCLIで対象ユーザーの二要素認証を解除する');
         $events = array_column(AuditLog::recent(), 'event');
         checkFeature(in_array('cli_recovery', $events, true), 'CLI復旧を監査ログへ記録する');
 

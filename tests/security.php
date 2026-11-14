@@ -140,6 +140,8 @@ try {
     expect(!LoginLock::recordFailure('192.0.2.11', 'admin'), '分散攻撃の2回目');
     expect(LoginLock::recordFailure('192.0.2.12', 'ADMIN'), 'IPを変えてもアカウントが上限に達する');
     expect(LoginLock::isLocked('192.0.2.99', 'admin'), '新しいIPからも同じアカウントを拒否する');
+    expect(LoginLock::retryAfterSeconds('192.0.2.99', 'admin') <= 30, 'アカウント全体の待機は最大30秒');
+    expect(LoginLock::retryAfterSeconds('192.0.2.99', 'admin', true) === 0, '許可IPに外部のアカウント待機を適用しない');
     expect(!LoginLock::isLocked('192.0.2.99', 'other'), '無関係なアカウントはロックしない');
     expect(LoginLock::remainingMinutes('192.0.2.99', 'admin') > 0, 'アカウントの残りロック時間を取得できる');
     expect(!LoginLock::clear('192.0.2.99', 'admin'), '成功処理でもロック中のアカウントを解除しない');

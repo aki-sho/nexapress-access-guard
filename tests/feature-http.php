@@ -63,7 +63,7 @@ assertSameValue(200, $page['status'], 'パスワードだけではログイン�
 assertContainsText('name="_stage" value="two-factor"', $page['body'], '二段階目の認証画面を表示');
 $challengeToken = csrfToken($page['body']);
 $response = request($client, $baseUrl, 'GET', '/admin');
-assertSameValue(302, $response['status'], '認証途中では管理画面に入れない');
+assertSameValue(404, $response['status'], '認証途中では管理画面に入れない');
 $response = request($client, $baseUrl, 'POST', '/secure-entry', [
     '_csrf_token' => 'invalid', '_stage' => 'two-factor', 'code' => $codes[0],
 ]);
@@ -78,7 +78,8 @@ $response = request($client, $baseUrl, 'POST', '/secure-entry', [
 assertSameValue(302, $response['status'], '復旧コードを確認してログインを完了');
 $response = request($client, $baseUrl, 'GET', '/admin');
 assertSameValue(200, $response['status'], '二要素認証後は管理画面へ入れる');
-request($client, $baseUrl, 'GET', '/admin/logout');
+$page = request($client, $baseUrl, 'GET', '/admin');
+request($client, $baseUrl, 'POST', '/admin/logout', ['_csrf_token' => csrfToken($page['body'])]);
 $response = featureSignIn($client);
 $challengeToken = csrfToken($response['body']);
 $response = request($client, $baseUrl, 'POST', '/secure-entry', [
