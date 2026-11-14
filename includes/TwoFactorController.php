@@ -9,6 +9,8 @@ use RuntimeException;
 
 class TwoFactorController
 {
+    private const MAX_ENROLLMENT_ATTEMPTS = 5;
+
     public function show(): void
     {
         try {
@@ -26,18 +28,34 @@ class TwoFactorController
         try {
             $user = $this->user();
             $id = (int)$user['id'];
-            $action = (string)($_POST['_action'] ?? '');
+            $action = $_POST['_action'] ?? null;
+            $password = $_POST['password'] ?? '';
+            $code = $_POST['code'] ?? '';
+
+            if (!is_string($code) || !is_string($password)) {
+                throw new RuntimeException('入力内容が正しくありません。');
+            }
 
             if ($action === 'enable') {
-                $pending = $_SESSION['access_guard_enrollment'] ?? [];
-
-                if (($pending['id'] ?? null) !== $id || ($pending['expires'] ?? 0) < time() ||
-                    !hash_equals($pending['password'] ?? '', hash('sha256', $user['password_hash']))) {
-                    unset($_SESSION['access_guard_enrollment']);
-                    throw new RuntimeException('登録手順の有効期限が切れました。最初からお試しください。');
+                $pending = $this->pendingEnrollment($user);
+                if ($pending === null) {
+                    throw new RuntimeException('登録を開始してから確認コードを入力してください。');
+                }
+                try {
+                    $codes = TwoFactor::enroll($id, $pending['secret'], $code);
+                } catch (InvalidEnrollmentCode $exception) {
+                    $attempts = ($pending['attempts'] ?? 0) + 1;
+                    if ($attempts >= self::MAX_ENROLLMENT_ATTEMPTS) {
+                        unset($_SESSION['access_guard_enrollment']);
+                    } else {
+                        $_SESSION['access_guard_enrollment']['attempts'] = $attempts;
+                    }
+                    AuditLog::record('mfa_management_failure', $user['username']);
+                    throw new RuntimeException($attempts >= self::MAX_ENROLLMENT_ATTEMPTS
+                        ? '確認コードの試行回数に達しました。登録をやり直してください。'
+                        : $exception->getMessage());
                 }
 
-                $codes = TwoFactor::enroll($id, $pending['secret'], (string)($_POST['code'] ?? ''));
                 unset($_SESSION['access_guard_enrollment']);
                 $_SESSION['access_guard_mfa_verified'] = TwoFactor::version($id);
                 AuditLog::record('mfa_enabled', $user['username']);
@@ -45,7 +63,7 @@ class TwoFactorController
                 return;
             }
 
-            if (!password_verify((string)($_POST['password'] ?? ''), $user['password_hash'])) {
+            if (!password_verify($password, $user['password_hash'])) {
                 AuditLog::record('mfa_management_failure', $user['username']);
                 throw new RuntimeException('現在のパスワードが正しくありません。');
             }
@@ -73,7 +91,7 @@ class TwoFactorController
                 throw new RuntimeException('操作が正しくありません。');
             }
 
-            $result = TwoFactor::verify($id, (string)($_POST['code'] ?? ''), $action);
+            $result = TwoFactor::verify($id, $code, $action);
 
             if (!$result['valid']) {
                 AuditLog::record('mfa_failure', $user['username']);
@@ -104,19 +122,38 @@ class TwoFactorController
         return $user;
     }
 
+    private function pendingEnrollment(array $user): ?array
+    {
+        $pending = $_SESSION['access_guard_enrollment'] ?? null;
+        if (!is_array($pending) || ($pending['id'] ?? null) !== (int)$user['id'] ||
+            ($pending['expires'] ?? 0) <= time() ||
+            !hash_equals($pending['password'] ?? '', hash('sha256', $user['password_hash'])) ||
+            ($pending['attempts'] ?? 0) >= self::MAX_ENROLLMENT_ATTEMPTS) {
+            unset($_SESSION['access_guard_enrollment']);
+            return null;
+        }
+
+        return $pending;
+    }
+
     private function render(?string $error = null, array $codes = []): void
     {
         $user = $this->user();
         $active = TwoFactor::enabled((int)$user['id']);
-        $pending = $_SESSION['access_guard_enrollment'] ?? null;
-
-        if ($pending !== null && (($pending['id'] ?? null) !== (int)$user['id'] || ($pending['expires'] ?? 0) < time())) {
-            unset($_SESSION['access_guard_enrollment']);
-            $pending = null;
+        $pending = $this->pendingEnrollment($user);
+        $uri = null;
+        $qr = null;
+        if (!$active && $pending !== null) {
+            $uri = 'otpauth://totp/NexaPress:' . rawurlencode($user['username'])
+                . '?secret=' . rawurlencode($pending['secret'])
+                . '&issuer=NexaPress&algorithm=SHA1&digits=6&period=30';
+            $qr = EnrollmentQr::render($uri);
         }
 
         header('Cache-Control: no-store');
         header('Referrer-Policy: no-referrer');
+        header('X-Frame-Options: DENY');
+        header("Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
         $title = '二要素認証';
         $csrfToken = Csrf::token();
         $action = url('admin/access-guard/two-factor');

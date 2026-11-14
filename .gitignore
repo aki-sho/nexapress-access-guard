@@ -1,4 +1,5 @@
 dist/
+/includes/qr-vendor/
 # Local release archives and transient outputs
 /release-history/
 /.github-sync*/

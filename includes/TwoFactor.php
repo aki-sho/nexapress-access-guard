@@ -4,6 +4,10 @@ namespace NexaPressAccessGuard;
 
 use RuntimeException;
 
+class InvalidEnrollmentCode extends RuntimeException
+{
+}
+
 class TwoFactor
 {
     public static function path(): string
@@ -37,21 +41,20 @@ class TwoFactor
         $counter = Totp::counter($secret, $code, time());
 
         if ($counter === null) {
-            throw new RuntimeException('確認コードが正しくありません。');
+            throw new InvalidEnrollmentCode('確認コードが正しくありません。');
         }
 
         self::initialize();
         $codes = self::recoveryCodes();
-        $encrypted = SecretCipher::encrypt($secret, $id);
 
         JsonStorage::update(self::path(), [], [self::class, 'validate'],
-            static function (array &$data) use ($id, $encrypted, $counter, $codes): void {
+            static function (array &$data) use ($id, $secret, $counter, $codes): void {
                 if ($id < 1 || isset($data[$id])) {
                     throw new RuntimeException('このアカウントはすでに二要素認証が有効です。');
                 }
 
                 $data[$id] = [
-                    'secret' => $encrypted,
+                    'secret' => SecretCipher::encrypt($secret, $id, $data === []),
                     'version' => bin2hex(random_bytes(16)),
                     'last_counter' => $counter,
                     'recovery' => array_map([self::class, 'hashRecovery'], $codes),

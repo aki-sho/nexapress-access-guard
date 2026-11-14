@@ -20,12 +20,18 @@ function featureRecoveryCodes(string $body): array
 
 configureExtension($runtimeDirectory, true);
 $mfaPath = '/admin/access-guard/two-factor';
+$unauthenticated = newClient();
+$page = request($unauthenticated, $baseUrl, 'GET', $mfaPath);
+assertNotContainsText('otpauth://', $page['body'], '未ログイン時に登録用キーを返さない');
+assertNotContainsText('<svg', $page['body'], '未ログイン時に登録用QRを返さない');
+curl_close($unauthenticated);
 $owner = newClient();
 $oldSession = newClient();
 assertSameValue(302, featureSignIn($owner)['status'], '二要素認証設定前の本人ログイン');
 assertSameValue(302, featureSignIn($oldSession)['status'], '既存セッションを準備');
 $page = request($owner, $baseUrl, 'GET', $mfaPath);
 assertSameValue(200, $page['status'], '本人の二要素認証設定画面');
+assertNotContainsText('<svg', $page['body'], 'パスワード確認前にQRコードを表示しない');
 $token = csrfToken($page['body']);
 $page = request($owner, $baseUrl, 'POST', $mfaPath, [
     '_csrf_token' => 'invalid', '_action' => 'begin', 'password' => 'correct-password',
@@ -35,19 +41,47 @@ $page = request($owner, $baseUrl, 'POST', $mfaPath, [
     '_csrf_token' => $token, '_action' => 'begin', 'password' => 'incorrect',
 ]);
 assertNotContainsText('otpauth://', $page['body'], '現在のパスワードが違えば秘密鍵を発行しない');
+assertNotContainsText('<svg', $page['body'], 'パスワードが違えばQRコードを表示しない');
 $page = request($owner, $baseUrl, 'POST', $mfaPath, [
     '_csrf_token' => $token, '_action' => 'begin', 'password' => 'correct-password',
 ]);
 preg_match('/<code>([A-Z2-7]{32})<\/code>/', $page['body'], $matches);
 $secret = $matches[1] ?? '';
 assertSameValue(32, strlen($secret), '本人確認後にセットアップキーを表示');
+assertContainsText('aria-label="二要素認証の登録用QRコード"', $page['body'], '本人確認後に登録用QRコードを表示');
 assertContainsText('no-store', $page['headers'], '秘密鍵を表示する画面をキャッシュしない');
+assertContainsText('Referrer-Policy: no-referrer', $page['headers'], '登録画面からリファラーを送信しない');
+assertContainsText("frame-ancestors 'none'", $page['headers'], '登録画面のフレーム埋め込みを拒否');
+$withoutReauth = request($oldSession, $baseUrl, 'GET', $mfaPath);
+assertNotContainsText('<svg', $withoutReauth['body'], '同一アカウントの別セッションに登録用QRを渡さない');
+assertNotContainsText($secret, $withoutReauth['body'], '別セッションへセットアップキーを渡さない');
+
+for ($attempt = 0; $attempt < 5; $attempt++) {
+    $page = request($owner, $baseUrl, 'POST', $mfaPath, [
+        '_csrf_token' => $token, '_action' => 'enable', 'code' => 'invalid',
+    ]);
+}
+assertNotContainsText($secret, $page['body'], '確認コードを5回間違えると登録用キーを破棄する');
+assertNotContainsText('<svg', $page['body'], '試行上限に達した登録用QRを表示しない');
+$oldCode = request($owner, $baseUrl, 'POST', $mfaPath, [
+    '_csrf_token' => $token, '_action' => 'enable', 'code' => \NexaPressAccessGuard\Totp::code($secret, time()),
+]);
+assertSameValue([], featureRecoveryCodes($oldCode['body']), '破棄した登録データでは有効化できない');
+$page = request($owner, $baseUrl, 'POST', $mfaPath, [
+    '_csrf_token' => $token, '_action' => 'begin', 'password' => 'correct-password',
+]);
+$previousSecret = $secret;
+preg_match('/<code>([A-Z2-7]{32})<\/code>/', $page['body'], $matches);
+$secret = $matches[1] ?? '';
+assertSameValue(32, strlen($secret), '再登録で新しいセットアップキーを発行する');
+assertNotContainsText($previousSecret, $page['body'], '再登録で古いセットアップキーを表示しない');
 $page = request($owner, $baseUrl, 'POST', $mfaPath, [
     '_csrf_token' => $token, '_action' => 'enable', 'code' => \NexaPressAccessGuard\Totp::code($secret, time()),
 ]);
 $codes = featureRecoveryCodes($page['body']);
 assertSameValue(10, count($codes), 'コード確認後に復旧コードを10件表示');
 assertContainsText('有効', $page['body'], '二要素認証の有効化');
+assertNotContainsText('<svg', $page['body'], '有効化後は登録用QRを表示しない');
 $mfaStorage = $runtimeDirectory . '/storage/extensions/access-guard/two-factor.json';
 assertNotContainsText($secret, file_get_contents($mfaStorage), 'セットアップキーを平文保存しない');
 assertNotContainsText($codes[0], file_get_contents($mfaStorage), '復旧コードを平文保存しない');

@@ -24,6 +24,11 @@ if (!class_exists(ZipArchive::class)) {
     );
 }
 
+if (!is_file($projectDirectory . '/includes/qr-vendor/autoload.php')) {
+    fwrite(STDERR, "QRコード生成ライブラリがありません。composer install --no-dev --no-plugins --no-scripts を実行してください。\n");
+    exit(1);
+}
+
 /*
  * manifest.jsonを読み込む
  */
@@ -166,6 +171,8 @@ $packagePaths = [
     'img.png',
     'README.md',
     'CHANGELOG.md',
+    'composer.json',
+    'composer.lock',
 ];
 
 /*
@@ -178,10 +185,16 @@ $iterator = new RecursiveIteratorIterator(
             FilesystemIterator::SKIP_DOTS
         ),
         static function (SplFileInfo $file) use ($projectDirectory, $packagePaths): bool {
-            return !$file->isLink() && (
-                $file->getPath() !== $projectDirectory ||
-                in_array($file->getFilename(), $packagePaths, true)
-            );
+            if ($file->isLink()) {
+                return false;
+            }
+            if ($file->getPath() === $projectDirectory) {
+                return in_array($file->getFilename(), $packagePaths, true);
+            }
+
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($projectDirectory) + 1));
+            return !str_starts_with($relative, 'includes/qr-vendor/') ||
+                !in_array($file->getFilename(), ['test', 'tests', '.github', 'phpunit.xml.dist'], true);
         }
     ),
     RecursiveIteratorIterator::LEAVES_ONLY

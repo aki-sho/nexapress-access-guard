@@ -8,7 +8,7 @@ class AuditLog
 {
     private const ROUTINE_EVENTS = [
         'access_denied', 'login_failure', 'login_locked', 'mfa_failure',
-        'login_success', 'logout', 'recovery_used',
+        'login_success', 'logout', 'recovery_used', 'mfa_management_failure',
     ];
 
     public static function path(): string

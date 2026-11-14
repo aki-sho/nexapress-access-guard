@@ -26,6 +26,7 @@ $includeFiles = [
     __DIR__ . '/includes/Totp.php',
     __DIR__ . '/includes/SecretCipher.php',
     __DIR__ . '/includes/TwoFactor.php',
+    __DIR__ . '/includes/EnrollmentQr.php',
     __DIR__ . '/includes/TwoFactorController.php',
     __DIR__ . '/includes/Notification.php',
     __DIR__ . '/includes/AuditLog.php',

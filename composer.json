@@ -1,0 +1,16 @@
+{
+  "name": "aki-sho/nexapress-access-guard",
+  "type": "project",
+  "description": "Runtime dependencies for NexaPress Access Guard QR enrollment.",
+  "require": {
+    "php": "^8.0",
+    "bacon/bacon-qr-code": "2.0.8"
+  },
+  "config": {
+    "allow-plugins": false,
+    "platform": {
+      "php": "8.0.0"
+    },
+    "vendor-dir": "includes/qr-vendor"
+  }
+}

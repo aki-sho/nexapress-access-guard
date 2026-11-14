@@ -4,7 +4,7 @@ namespace NexaPressAccessGuard;
 
 class SecretCipher
 {
-    private static function key(bool $create): string
+    private static function key(bool $allowNewKey): string
     {
         if (!function_exists('openssl_encrypt')) {
             throw new StorageException('二要素認証にはPHP OpenSSL拡張が必要です。');
@@ -20,7 +20,7 @@ class SecretCipher
             return $data;
         };
 
-        if (!$create) {
+        if (!$allowNewKey) {
             $data = JsonStorage::read($path, [], $validate);
             return base64_decode($data['key'], true);
         }
@@ -29,11 +29,11 @@ class SecretCipher
             static fn(array &$data): string => base64_decode($data['key'], true));
     }
 
-    public static function encrypt(string $secret, int $userId): string
+    public static function encrypt(string $secret, int $userId, bool $allowNewKey = false): string
     {
         $nonce = random_bytes(12);
         $tag = '';
-        $key = self::key(true);
+        $key = self::key($allowNewKey);
         $encrypted = openssl_encrypt($secret, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag, (string)$userId);
 
         if ($encrypted === false) {

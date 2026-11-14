@@ -15,16 +15,20 @@ if (!isset($user, $csrfToken, $active)) {
         <pre><?php foreach ($codes as $code): ?><?= e($code) . "\n" ?><?php endforeach; ?></pre>
     <?php endif; ?>
     <?php if (!$active && $pending !== null): ?>
-        <p>認証アプリの「セットアップキーを入力」で、次のキーを登録してください。</p>
-        <p><code><?= e($pending['secret']) ?></code></p>
-        <?php $uri = 'otpauth://totp/' . rawurlencode('NexaPress:' . $user['username'])
-            . '?secret=' . $pending['secret'] . '&issuer=NexaPress&algorithm=SHA1&digits=6&period=30'; ?>
+        <?php if ($qr !== null): ?>
+            <p>認証アプリでQRコードを読み取ってください。</p>
+            <?= $qr ?>
+        <?php endif; ?>
         <p><a href="<?= e($uri) ?>">認証アプリで開く</a></p>
+        <details<?= $qr === null ? ' open' : '' ?>>
+            <summary>セットアップキーを手入力する</summary>
+            <p><code><?= e($pending['secret']) ?></code></p>
+        </details>
         <form action="<?= e($action) ?>" method="post">
             <input type="hidden" name="_csrf_token" value="<?= e($csrfToken) ?>">
             <input type="hidden" name="_action" value="enable">
             <label for="mfa-confirm">認証アプリの6桁の確認コード</label>
-            <input id="mfa-confirm" name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required>
+            <input id="mfa-confirm" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
             <button class="button full" type="submit">二要素認証を有効にする</button>
         </form>
     <?php elseif (!$active): ?>

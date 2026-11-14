@@ -91,6 +91,12 @@ namespace {
         } catch (\NexaPressAccessGuard\StorageException $exception) {
             checkFeature(!is_file($keyPath), '暗号鍵紛失時に別の鍵を自動生成しない');
         }
+        try {
+            TwoFactor::enroll(2, $secret, Totp::code($secret, time()));
+            checkFeature(false, '別のアカウントを登録して既存の暗号鍵を作り直さない');
+        } catch (\NexaPressAccessGuard\StorageException $exception) {
+            checkFeature(!is_file($keyPath) && TwoFactor::enabled(1) && !TwoFactor::enabled(2), '既存登録がある場合は暗号鍵の復旧を要求する');
+        }
         file_put_contents($keyPath, '{}');
         try {
             SecretCipher::encrypt($secret, 1);
