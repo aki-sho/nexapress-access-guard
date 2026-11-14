@@ -154,26 +154,35 @@ if (
 }
 
 /*
- * ZIPへ含めないファイル・フォルダ
+ * 配布に必要なファイルとフォルダ
  */
-$excludedPaths = [
-    '.git',
-    '.github',
-    '.idea',
-    '.vscode',
-    'dist',
-    'tests',
-    'build.php',
-    '.gitignore',
+$packagePaths = [
+    'admin',
+    'assets',
+    'bin',
+    'includes',
+    'bootstrap.php',
+    'manifest.json',
+    'img.png',
+    'README.md',
+    'CHANGELOG.md',
 ];
 
 /*
  * 拡張機能のファイルを取得
  */
 $iterator = new RecursiveIteratorIterator(
-    new RecursiveDirectoryIterator(
-        $projectDirectory,
-        FilesystemIterator::SKIP_DOTS
+    new RecursiveCallbackFilterIterator(
+        new RecursiveDirectoryIterator(
+            $projectDirectory,
+            FilesystemIterator::SKIP_DOTS
+        ),
+        static function (SplFileInfo $file) use ($projectDirectory, $packagePaths): bool {
+            return !$file->isLink() && (
+                $file->getPath() !== $projectDirectory ||
+                in_array($file->getFilename(), $packagePaths, true)
+            );
+        }
     ),
     RecursiveIteratorIterator::LEAVES_ONLY
 );
@@ -193,26 +202,6 @@ foreach ($iterator as $file) {
         '/',
         $relativePath
     );
-
-    $topDirectory = explode(
-        '/',
-        $relativePath
-    )[0];
-
-    if (
-        in_array(
-            $topDirectory,
-            $excludedPaths,
-            true
-        ) ||
-        in_array(
-            $relativePath,
-            $excludedPaths,
-            true
-        )
-    ) {
-        continue;
-    }
 
     /*
      * ZIP内はaccess-guardフォルダから開始
